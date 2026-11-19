@@ -89,10 +89,10 @@
     .badge-pendente { background: #ffedd5; color: var(--warning); }
     .badge-impresso { background: #dcfce7; color: var(--success); }
 
-    .qr-placeholder {
-      width: 180px; height: 180px; margin: 1rem auto; background: #f8fafc;
+    .qr-box {
+      width: 220px; height: 220px; margin: 1.5rem auto; background: #ffffff;
       border: 2px solid var(--border); border-radius: 12px; display: flex;
-      align-items: center; justify-content: center; font-weight: bold; color: var(--muted);
+      align-items: center; justify-content: center; padding: 10px;
     }
 
     .auto-print-banner {
@@ -141,9 +141,10 @@
         <p style="color: var(--muted); font-size: 0.9rem; margin-bottom: 1rem;">
           Aponte a câmera do seu celular para abrir o autoatendimento e enviar seu documento direto para a impressora.
         </p>
-        <div class="qr-placeholder" style="width: 220px; height: 220px; margin: 1.5rem auto;">
-          <img id="qr-totem-img" src="" alt="QR Code Totem" style="width: 100%; height: 100%; border-radius: 8px;" />
+        <div class="qr-box">
+          <canvas id="qr-canvas" width="200" height="200"></canvas>
         </div>
+        <p id="qr-url-label" style="font-size: 0.78rem; color: var(--muted); word-break: break-all; margin-bottom: 1rem;"></p>
         <button class="btn btn-primary" onclick="avancarParaEnvio()">Enviar Arquivo Agora (Neste Aparelho)</button>
       </div>
 
@@ -236,9 +237,10 @@
   <!-- ÁREA DE IMPRESSÃO A4 PARA EPSON L3250 -->
   <div id="print-area"></div>
 
-  <!-- FIREBASE SDK v10 (COMPAT) -->
+  <!-- FIREBASE SDK v10 (COMPAT) + QR CODE GENERATOR LOCAL -->
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
 
   <script>
     // =========================================================================
@@ -277,13 +279,39 @@
     // =========================================================================
     // CONFIGURAÇÃO DO LINK DO QR CODE (COLOQUE SEU LINK DO GITHUB PAGES ABAIXO)
     // =========================================================================
-    const linkGithubPages = "https://SEU-USUARIO.github.io/SEU-REPOSITORIO/"; 
-    
-    const urlTotem = (window.location.hostname === "localhost" || window.location.protocol === "file:") && !linkGithubPages.includes("SEU-USUARIO")
-      ? linkGithubPages 
-      : window.location.href.split('?')[0];
+    const linkGithubPages = "https://SEU-USUARIO.github.io/SEU-REPOSITORIO/";
 
-    document.getElementById("qr-totem-img").src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(urlTotem + "?modo=cliente")}`;
+    const ehAmbienteLocal = window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1" ||
+      window.location.protocol === "file:";
+
+    const urlBase = (ehAmbienteLocal && !linkGithubPages.includes("SEU-USUARIO"))
+      ? linkGithubPages
+      : window.location.href.split("?")[0];
+
+    const separador = urlBase.includes("?") ? "&" : "?";
+    const destinoQr = `${urlBase}${separador}modo=cliente`;
+
+    document.getElementById("qr-url-label").textContent = ehAmbienteLocal && linkGithubPages.includes("SEU-USUARIO")
+      ? "⚠️ Preencha 'linkGithubPages' com sua URL pública para o celular abrir."
+      : destinoQr;
+
+    const canvasQr = document.getElementById("qr-canvas");
+    if (window.QRCode && canvasQr) {
+      QRCode.toCanvas(canvasQr, destinoQr, { width: 196, margin: 1 }, function (err) {
+        if (err) {
+          console.error("Erro ao gerar QR Code:", err);
+          mostrarAviso("⚠️ Falha ao gerar o QR Code.");
+        }
+      });
+    } else {
+      const ctx = canvasQr.getContext("2d");
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => ctx.drawImage(img, 0, 0, canvasQr.width, canvasQr.height);
+      img.onerror = () => mostrarAviso("⚠️ Não foi possível carregar o QR Code.");
+      img.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(destinoQr)}`;
+    }
 
     if (window.location.search.includes("modo=cliente")) {
       avancarParaEnvio();
@@ -435,6 +463,20 @@
       } catch (e) {}
     }
 
+    function base64ParaBlobUrl(dataUrl) {
+      const partes = dataUrl.split(",");
+      const mimeMatch = partes[0].match(/:(.*?);/);
+      const mime = mimeMatch ? mimeMatch[1] : "application/pdf";
+      const bytesBinarios = atob(partes[1]);
+      const tamanho = bytesBinarios.length;
+      const bytes = new Uint8Array(tamanho);
+      for (let i = 0; i < tamanho; i++) {
+        bytes[i] = bytesBinarios.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: mime });
+      return URL.createObjectURL(blob);
+    }
+
     async function executarImpressaoAutomaticaEpson(pedido) {
       if (pedidosJaProcessados.has(pedido.id)) return;
       pedidosJaProcessados.add(pedido.id);
@@ -462,10 +504,23 @@
           await concluirPedido(pedido.id);
         }, 600);
       } else if (pedido.arquivoData && pedido.arquivoData.startsWith("data:application/pdf")) {
-        const win = window.open("");
+        const blobUrl = base64ParaBlobUrl(pedido.arquivoData);
+        const win = window.open(blobUrl, "_blank");
         if (win) {
-          win.document.write(`<iframe src="${pedido.arquivoData}" frameborder="0" style="border:0; top:0; left:0; bottom:0; right:0; width:100%; height:100%;" allowfullscreen></iframe>`);
-          setTimeout(() => { win.print(); }, 1000);
+          if (pedido.corModo === "Preto e Branco") {
+            win.addEventListener("load", () => {
+              try {
+                win.document.body.style.filter = "grayscale(100%)";
+              } catch (e) {}
+            });
+          }
+          setTimeout(() => {
+            try {
+              win.focus();
+              win.print();
+            } catch (e) {}
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+          }, 1200);
         }
         await concluirPedido(pedido.id);
       } else {

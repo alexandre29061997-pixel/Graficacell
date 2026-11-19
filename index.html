@@ -173,4 +173,393 @@
           <input type="number" id="qtd-paginas" value="1" min="1" max="100" />
         </div>
 
-        <div class="form
+        <div class="form-group">
+          <label for="arquivo-upload">Selecionar Arquivo (Imagem JPG/PNG ou PDF)</label>
+          <input type="file" id="arquivo-upload" accept="image/*,.pdf" onchange="processarArquivoSelecionado(event)" />
+          <small id="arquivo-status" style="color: var(--muted); display: block; margin-top: 0.3rem;">
+            Selecione uma imagem ou PDF para ir direto para a impressora.
+          </small>
+        </div>
+
+        <div class="form-group">
+          <label for="link-arquivo">Ou cole um Link (Opcional)</label>
+          <input type="text" id="link-arquivo" placeholder="Link do Google Drive ou observação" />
+        </div>
+
+        <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem;">
+          <button class="btn btn-primary" onclick="enviarParaFila()">Enviar para Fila de Impressão</button>
+          <button class="btn" style="background: #e2e8f0; color: var(--text);" onclick="voltarParaQrCode()">Voltar</button>
+        </div>
+      </div>
+
+      <!-- ETAPA 3: TELA DE ESPERA / SUCESSO -->
+      <div id="totem-step-sucesso" class="card" style="max-width: 500px; margin: 0 auto; text-align: center; display: none;">
+        <div style="font-size: 3.5rem; margin-bottom: 0.5rem;">🖨️</div>
+        <h2>Arquivo Enviado com Sucesso!</h2>
+        <p style="color: var(--text); font-size: 1.1rem; margin: 1rem 0;">
+          Seu documento já está na fila e <strong>será impresso em breve</strong>.
+        </p>
+        <div style="background: #dcfce7; border: 1px solid #16a34a; padding: 1rem; border-radius: 8px; margin: 1rem 0;">
+          <strong style="color: var(--success); font-size: 1.1rem;">AGUARDANDO IMPRESSÃO</strong>
+        </div>
+        <button class="btn btn-primary" style="margin-top: 1rem;" onclick="resetarTotem()">Fazer Outro Envio</button>
+      </div>
+    </section>
+
+    <!-- TELA 2: PAINEL DO NOTEBOOK (EPSON L3250 AUTOMÁTICA) -->
+    <section id="view-admin" class="view">
+      <div class="auto-print-banner">
+        <div>
+          <strong>🟢 Impressão Automática Epson L3250 Ativa:</strong> Deixe esta aba aberta no notebook. Novos arquivos são impressos sozinhos.
+        </div>
+        <label style="display: flex; align-items: center; gap: 0.4rem; margin: 0; cursor: pointer;">
+          <input type="checkbox" id="toggle-auto-print" checked style="width: auto;" />
+          Ativado
+        </label>
+      </div>
+
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <h2>Fila da Epson L3250 em Tempo Real</h2>
+          <span id="contador-fila" style="font-size: 0.85rem; color: var(--muted);">0 pedidos</span>
+        </div>
+        <div id="lista-pedidos">
+          <p style="color: var(--muted);">Aguardando arquivos do totem...</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- NOTIFICAÇÃO VISUAL -->
+  <div id="toast" class="toast-box"></div>
+
+  <!-- ÁREA DE IMPRESSÃO A4 PARA EPSON L3250 -->
+  <div id="print-area"></div>
+
+  <!-- FIREBASE SDK v10 (COMPAT) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+  <script>
+    // =========================================================================
+    // CONFIGURAÇÃO DO FIREBASE (PROJETO 'GRAFICACELL' - INALTERADA)
+    // =========================================================================
+    const firebaseConfig = {
+      apiKey: "AIzaSyCWurztjY7JZ_q6UG29RUXwq0YGjJdPKDk",
+      authDomain: "graficacell.firebaseapp.com",
+      projectId: "graficacell",
+      storageBucket: "graficacell.firebasestorage.app",
+      messagingSenderId: "712658630232",
+      appId: "1:712658630232:web:197f72b81e22e9935afc2d"
+    };
+
+    let db = null;
+    let firebaseAtivo = false;
+
+    try {
+      firebase.initializeApp(firebaseConfig);
+      db = firebase.firestore();
+      firebaseAtivo = true;
+      document.getElementById("db-status").textContent = "Firebase Online (graficacell)";
+      document.getElementById("db-status").classList.add("online");
+    } catch (e) {
+      console.error("Erro ao iniciar Firebase:", e);
+      document.getElementById("db-status").textContent = "Erro de Conexão";
+    }
+
+    function mostrarAviso(msg) {
+      const t = document.getElementById("toast");
+      t.textContent = msg;
+      t.style.display = "flex";
+      setTimeout(() => { t.style.display = "none"; }, 3500);
+    }
+
+    // =========================================================================
+    // CONFIGURAÇÃO DO LINK DO QR CODE (COLOQUE SEU LINK DO GITHUB PAGES ABAIXO)
+    // =========================================================================
+    const linkGithubPages = "https://SEU-USUARIO.github.io/SEU-REPOSITORIO/"; 
+    
+    const urlTotem = (window.location.hostname === "localhost" || window.location.protocol === "file:") && !linkGithubPages.includes("SEU-USUARIO")
+      ? linkGithubPages 
+      : window.location.href.split('?')[0];
+
+    document.getElementById("qr-totem-img").src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(urlTotem + "?modo=cliente")}`;
+
+    if (window.location.search.includes("modo=cliente")) {
+      avancarParaEnvio();
+    }
+
+    // =========================================================================
+    // CONTROLE DE TELAS DO TOTEM
+    // =========================================================================
+    function avancarParaEnvio() {
+      document.getElementById("totem-step-qrcode").style.display = "none";
+      document.getElementById("totem-step-form").style.display = "block";
+      document.getElementById("totem-step-sucesso").style.display = "none";
+    }
+
+    function voltarParaQrCode() {
+      document.getElementById("totem-step-qrcode").style.display = "block";
+      document.getElementById("totem-step-form").style.display = "none";
+      document.getElementById("totem-step-sucesso").style.display = "none";
+    }
+
+    function resetarTotem() {
+      document.getElementById("cliente-nome").value = "";
+      document.getElementById("qtd-paginas").value = "1";
+      document.getElementById("link-arquivo").value = "";
+      document.getElementById("arquivo-upload").value = "";
+      arquivoBase64Temp = null;
+      nomeArquivoTemp = "";
+      document.getElementById("arquivo-status").textContent = "Selecione uma imagem ou PDF para ir direto para a impressora.";
+      voltarParaQrCode();
+    }
+
+    // =========================================================================
+    // LEITURA E COMPRESSÃO DE ARQUIVO
+    // =========================================================================
+    let arquivoBase64Temp = null;
+    let nomeArquivoTemp = "";
+
+    function processarArquivoSelecionado(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      nomeArquivoTemp = file.name;
+
+      if (file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = function (e) {
+          const img = new Image();
+          img.onload = function () {
+            const canvas = document.createElement("canvas");
+            const maxDim = 1600;
+            let w = img.width;
+            let h = img.height;
+            if (w > maxDim || h > maxDim) {
+              if (w > h) { h = (h * maxDim) / w; w = maxDim; }
+              else { w = (w * maxDim) / h; h = maxDim; }
+            }
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0, w, h);
+            arquivoBase64Temp = canvas.toDataURL("image/jpeg", 0.82);
+            document.getElementById("arquivo-status").innerHTML = `<strong style="color:var(--success)">✔ Imagem pronta:</strong> ${file.name}`;
+          };
+          img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+      } else {
+        const limitePdfBytes = 10 * 1024 * 1024; // 10 MB
+        if (file.size > limitePdfBytes) {
+          mostrarAviso("⚠️ PDF acima de 10MB: cole o link do Google Drive ou WhatsApp.");
+          event.target.value = "";
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = function (e) {
+          arquivoBase64Temp = e.target.result;
+          document.getElementById("arquivo-status").innerHTML = `<strong style="color:var(--success)">✔ PDF anexado:</strong> ${file.name}`;
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+
+    const nomesServicos = {
+      pb: "Preto e Branco (A4)",
+      color: "Colorido (A4)",
+      foto: "Papel Fotográfico"
+    };
+
+    // =========================================================================
+    // ENVIO DIRETO PARA O FIREBASE
+    // =========================================================================
+    async function enviarParaFila() {
+      const cliente = document.getElementById("cliente-nome").value.trim();
+      const link = document.getElementById("link-arquivo").value.trim();
+
+      if (!cliente) {
+        mostrarAviso("⚠️ Por favor, informe seu nome.");
+        return;
+      }
+      if (!arquivoBase64Temp && !link) {
+        mostrarAviso("⚠️ Selecione um arquivo ou cole um link.");
+        return;
+      }
+
+      const tipo = document.getElementById("tipo-servico").value;
+      const qtd = parseInt(document.getElementById("qtd-paginas").value) || 1;
+
+      const pedido = {
+        cliente,
+        servico: nomesServicos[tipo],
+        corModo: tipo === "pb" ? "Preto e Branco" : "Colorido",
+        quantidade: qtd,
+        arquivo: link || nomeArquivoTemp || "Arquivo Anexado",
+        arquivoData: arquivoBase64Temp || "",
+        status: "pendente",
+        criadoEm: new Date().toISOString()
+      };
+
+      if (firebaseAtivo && db) {
+        try {
+          await db.collection("pedidos_impressao").add({
+            ...pedido,
+            timestamp: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        } catch (err) {
+          mostrarAviso("❌ Erro ao enviar para o Firebase: " + err.message);
+          return;
+        }
+      }
+
+      // Trava na tela de sucesso/aviso
+      document.getElementById("totem-step-form").style.display = "none";
+      document.getElementById("totem-step-sucesso").style.display = "block";
+    }
+
+    // =========================================================================
+    // MOTOR DE IMPRESSÃO AUTOMÁTICA (EPSON L3250 NO NOTEBOOK)
+    // =========================================================================
+    const pedidosJaProcessados = new Set();
+
+    function tocarAlertaSonoro() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        osc.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.25);
+      } catch (e) {}
+    }
+
+    async function executarImpressaoAutomaticaEpson(pedido) {
+      if (pedidosJaProcessados.has(pedido.id)) return;
+      pedidosJaProcessados.add(pedido.id);
+
+      const autoPrintAtivo = document.getElementById("toggle-auto-print").checked;
+      const estaNaAbaAdmin = document.getElementById("view-admin").classList.contains("active");
+
+      if (!autoPrintAtivo || !estaNaAbaAdmin) return;
+
+      tocarAlertaSonoro();
+
+      const area = document.getElementById("print-area");
+      const filtroCor = pedido.corModo === "Preto e Branco" ? "filter: grayscale(100%);" : "";
+      const copias = Math.min(pedido.quantidade || 1, 50);
+
+      if (pedido.arquivoData && pedido.arquivoData.startsWith("data:image/")) {
+        let paginasHtml = "";
+        for (let i = 0; i < copias; i++) {
+          paginasHtml += `<img src="${pedido.arquivoData}" style="${filtroCor}" />`;
+        }
+        area.innerHTML = paginasHtml;
+
+        setTimeout(async () => {
+          window.print();
+          await concluirPedido(pedido.id);
+        }, 600);
+      } else if (pedido.arquivoData && pedido.arquivoData.startsWith("data:application/pdf")) {
+        const win = window.open("");
+        if (win) {
+          win.document.write(`<iframe src="${pedido.arquivoData}" frameborder="0" style="border:0; top:0; left:0; bottom:0; right:0; width:100%; height:100%;" allowfullscreen></iframe>`);
+          setTimeout(() => { win.print(); }, 1000);
+        }
+        await concluirPedido(pedido.id);
+      } else {
+        if (pedido.arquivo && pedido.arquivo.startsWith("http")) {
+          window.open(pedido.arquivo, "_blank");
+        }
+      }
+    }
+
+    // =========================================================================
+    // LISTAGEM EM TEMPO REAL (ONSNAPSHOT)
+    // =========================================================================
+    function iniciarListenerPedidos() {
+      if (firebaseAtivo && db) {
+        db.collection("pedidos_impressao")
+          .orderBy("criadoEm", "desc")
+          .limit(50)
+          .onSnapshot((snapshot) => {
+            const lista = [];
+            snapshot.forEach((doc) => {
+              const dados = { id: doc.id, ...doc.data() };
+              lista.push(dados);
+
+              if (dados.status === "pendente") {
+                executarImpressaoAutomaticaEpson(dados);
+              }
+            });
+            renderizarPedidos(lista);
+          }, (error) => {
+            console.error("Erro no listener Firestore:", error);
+            document.getElementById("lista-pedidos").innerHTML = `<p style="color: var(--danger);">Erro ao carregar fila do Firebase.</p>`;
+          });
+      }
+    }
+
+    function renderizarPedidos(pedidos) {
+      const container = document.getElementById("lista-pedidos");
+      document.getElementById("contador-fila").textContent = `${pedidos.length} arquivo(s)`;
+
+      if (pedidos.length === 0) {
+        container.innerHTML = `<p style="color: var(--muted);">Nenhum arquivo na fila no momento.</p>`;
+        return;
+      }
+
+      container.innerHTML = pedidos.map(p => `
+        <div class="order-item">
+          <div class="order-info">
+            <h4>${p.cliente}</h4>
+            <p><strong>${p.quantidade}x</strong> ${p.servico} (${p.corModo || 'Padrão'}) | Arquivo: ${p.arquivo}</p>
+            <div style="margin-top: 0.4rem; display: flex; gap: 0.5rem; align-items: center;">
+              <span class="badge ${p.status === 'impresso' ? 'badge-impresso' : 'badge-pendente'}">
+                ${p.status}
+              </span>
+              ${p.arquivoData ? `<button class="btn btn-sm" style="background:#eff6ff; color:var(--primary);" onclick="reimprimirManual('${p.id}')">🖨️ Imprimir Agora</button>` : ''}
+            </div>
+          </div>
+          <div style="display: flex; gap: 0.5rem;">
+            ${p.status !== 'impresso' ? `<button class="btn btn-success btn-sm" onclick="concluirPedido('${p.id}')">Concluir</button>` : ''}
+            <button class="btn btn-sm" style="background: #e2e8f0;" onclick="excluirPedido('${p.id}')">Excluir</button>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    async function reimprimirManual(id) {
+      pedidosJaProcessados.delete(id);
+      const doc = await db.collection("pedidos_impressao").doc(id).get();
+      if (doc.exists) {
+        executarImpressaoAutomaticaEpson({ id: doc.id, ...doc.data() });
+      }
+    }
+
+    async function concluirPedido(id) {
+      if (firebaseAtivo && db) {
+        await db.collection("pedidos_impressao").doc(id).update({ status: "impresso" });
+      }
+    }
+
+    async function excluirPedido(id) {
+      if (firebaseAtivo && db) {
+        await db.collection("pedidos_impressao").doc(id).delete();
+        mostrarAviso("🗑️ Pedido removido da fila.");
+      }
+    }
+
+    function switchTab(tab) {
+      document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+      document.querySelectorAll("nav button").forEach(b => b.classList.remove("active"));
+      document.getElementById("view-" + tab).classList.add("active");
+      document.getElementById("tab-" + tab).classList.add("active");
+    }
+
+    // Inicialização
+    iniciarListenerPedidos();
+  </script>
+</body>
+</html>
